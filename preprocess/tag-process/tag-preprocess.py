@@ -12,8 +12,6 @@ from sklearn import preprocessing
 import pdb
 # from utils.resolve_osx_aliases import resolve_osx_alias
 
-
-
 # this is either just the regular shape, or it returns a leading 1 for mono
 def get_canonical_shape(signal):
     if len(signal.shape) == 1:
@@ -40,7 +38,7 @@ def find_max_shape(path, mono=False, sr=None, dur=None, clean=False):
 
     return (max(s[0] for s in shapes), max(s[1] for s in shapes))
 
-def convert_one_file(printevery, class_files, nb_classes, classname, n_load, dirname, resample, mono, already_split, nosplit, n_train, outpath, subdir, max_shape, clean, out_format, mels, phase, file_index):
+def convert_one_file(printevery, class_files, nb_classes, classname, n_load, dirname, resample, mono, already_split, nosplit, n_train, n_validate, outpath, subdir, max_shape, clean, out_format, mels, phase, file_index):
     infilename = class_files[file_index]
     audio_path = dirname + '/' + infilename
 
@@ -73,16 +71,22 @@ def convert_one_file(printevery, class_files, nb_classes, classname, n_load, dir
     layers = make_layered_melgram(padded_signal, sr, mels=mels, phase=phase)
 
     if not already_split and (not nosplit):
-        if (file_index >= n_train):
-            outsub = "Test/"
-        else:
+        print("file index: %i " % (file_index, ))
+        if (file_index < n_validate):
+
+            outsub = "Validate/"
+        elif (file_index >= n_validate and file_index < n_validate + n_train):
             outsub = "Train/"
+        else:
+            outsub = "Test/"
     elif nosplit:
         outsub = ""
     else:
         outsub = subdir
 
     outfile = outpath + outsub  + '/' + infilename+'.'+out_format
+
+    # print(outfile)
     save_melgram(outfile, layers, out_format=out_format)
     return
 
@@ -126,7 +130,7 @@ def create_tag_dict(tag_file):
 
 
 
-def preprocess_dataset(inpath="Samples/", outpath="Preproc/", train_percentage=0.8, resample=None, already_split=False,
+def preprocess_dataset(inpath="Samples/", outpath="Preproc/", train_percentage=0.8, validate_percentage=0.1, resample=None, already_split=False,
     nosplit=False, sequential=False, mono=False, dur=None, clean=False, out_format='npy', mels=96, phase=False):
 
     if (resample is not None):
@@ -134,13 +138,11 @@ def preprocess_dataset(inpath="Samples/", outpath="Preproc/", train_percentage=0
     
     if (True == already_split):
         print(" Data is already split into Train & Test",flush=True)
-        sampleset_subdirs = ["Train/","Test/"]
+        sampleset_subdirs = ["Train/", "Test/"]
     elif nosplit:
         print(" All files output to same directory",flush=True)
         sampleset_subdirs = ["./"]
-    else:
-        print(" Will be imposing 80-20 (Train-Test) split",flush=True)
-        
+    else:        
         sampleset_subdirs = ["./"]
 
     
@@ -160,18 +162,22 @@ def preprocess_dataset(inpath="Samples/", outpath="Preproc/", train_percentage=0
     if nosplit:
         train_outpath = outpath
         test_outpath = outpath
+        validate_outpath = outpath
     else:
         train_outpath = outpath+"Train/"
         test_outpath = outpath+"Test/"
+        validate_outpath = outpath+"Validate/"
     if not os.path.exists(outpath):
         os.mkdir( outpath );   # make a new directory for preproc'd files
         if not nosplit:
             os.mkdir( train_outpath )
             os.mkdir( test_outpath )
+            os.mkdir( validate_outpath )
     
     else:
         train_outpath = outpath
         test_outpath = outpath
+        validate_outpath = outpath
     
     parallel = False     # set to false for debugging. when parallel jobs crash, usually no error messages are given, the system just hangs
     if (parallel):
@@ -196,21 +202,23 @@ def preprocess_dataset(inpath="Samples/", outpath="Preproc/", train_percentage=0
         np.random.shuffle(class_files)   # shuffle directory listing (e.g. to avoid alphabetic order)
     n_files = len(class_files)
     n_load = n_files            # sometimes we may multiple by a small # for debugging
-    n_train = int( n_load * train_percentage)
+    n_train = int( n_load * train_percentage )
+    n_validate = int( n_load * validate_percentage )
 
     printevery = 20             # how often to output status messages when processing lots of files
 
-    file_indices = tuple( range(len(class_files)))
+    file_indices = tuple( range(len(class_files)) )
     class_index = 1
     nb_classes = 1
     classname = 'tagging-set'
     subdir = ''
     if (not parallel):
+        print(len(file_indices))
         for file_index in file_indices:    # loop over all files
-            convert_one_file(printevery, class_files, nb_classes, classname, n_load, dirname,resample, mono, already_split, nosplit, n_train, outpath, subdir, max_shape, clean, out_format, mels, phase, file_index)
+            convert_one_file(printevery, class_files, nb_classes, classname, n_load, dirname,resample, mono, already_split, nosplit, n_train, n_validate, outpath, subdir, max_shape, clean, out_format, mels, phase, file_index)
     else:
         pool = mp.Pool(cpu_count)
-        pool.map(partial(convert_one_file, printevery, class_files, nb_classes, classname, n_load, dirname,resample, mono, already_split, nosplit, n_train, outpath, subdir, max_shape, clean, out_format, mels, phase), file_indices)
+        pool.map(partial(convert_one_file, printevery, class_files, nb_classes, classname, n_load, dirname,resample, mono, already_split, nosplit, n_train, n_validate, outpath, subdir, max_shape, clean, out_format, mels, phase), file_indices)
         pool.close() # shut down the pool
 
     print("")    # at the very end, newline
@@ -222,8 +230,6 @@ if __name__ == '__main__':
     import pdb
     import pickle
     
-    yo = create_tag_dict('/hdd/datasets/MuseTek/tags/tagged_samples.csv')
-    pickle.dump(yo, open('labels.p','wb'))
     
     parser = argparse.ArgumentParser(description="preprocess_data: convert sames to python-friendly data format for faster loading")
     parser.add_argument("-a", "--already", help="data is already split into Test & Train (default is to add 80-20 split",action="store_true")
@@ -236,6 +242,7 @@ if __name__ == '__main__':
     parser.add_argument('-c', "--clean", help="Assume 'clean data'; Do not check to find max shape (faster)", action='store_true')
     parser.add_argument('-f','--format', help="format of output file (npz, jpeg, png, etc). Default = npz", type=str, default='npz')
     parser.add_argument('-i','--inpath', help="input directory for audio samples (default='Samples')", type=str, default='Samples')
+    parser.add_argument('--data', help="location of csv file containing tag information", type=str, default='../../data/data.csv')
     parser.add_argument('-o','--outpath', help="output directory for spectrograms (default='Preproc')", type=str, default='Preproc')
     parser.add_argument("--mels", help="number of mel coefficients to use in spectrograms", type=int, default=96)
     parser.add_argument("--phase", help="Include phase information as extra channels", action='store_true')
@@ -250,10 +257,8 @@ if __name__ == '__main__':
         print("  See https://github.com/numpy/numpy/issues/5752 for more on this.")
         print("")
 
+    yo = create_tag_dict(args.data)
+    pickle.dump(yo, open('labels.p','wb'))
+
     preprocess_dataset(inpath=args.inpath+'/', outpath=args.outpath+'/', resample=args.resample, already_split=args.already, sequential=args.sequential, mono=args.mono,
         nosplit=args.nosplit, dur=args.dur, clean=args.clean, out_format=args.format, mels=args.mels, phase=args.phase)
-
-
-
-    
-
